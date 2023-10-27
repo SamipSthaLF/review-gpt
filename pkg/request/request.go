@@ -3,6 +3,8 @@ package request
 import (
 	// for marshalling
 	"bytes"
+	"log"
+
 	// for json
 	"encoding/json"
 	"fmt"
@@ -15,6 +17,8 @@ import (
 	"errors"
 	// for the requests
 	"net/http"
+
+	"github.com/charmbracelet/glamour"
 )
 
 // the struct to use for the body of the request
@@ -94,7 +98,18 @@ func RequestApi(gitDiff string, model string, maxtokens int, temperature float64
 	}
 	// print each improvement
 	for _, improvement := range improvements {
-		fmt.Println(improvement)
+		renderer, err := glamour.NewTermRenderer(
+			glamour.WithStyles(glamour.DraculaStyleConfig), // ASCIIStyle is one of many available styles
+		)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		out, err := renderer.Render(improvement)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(out)
 	}
 }
 
@@ -167,7 +182,7 @@ func RequestImprovements(key string, gitDiff string, rawModel string, maxtokens 
 	// request url
 	url := fmt.Sprintf("https://api.openai.com/v1/%v", endUrl)
 	// the instruction
-	promptPrefix := "explain the git diff below, and from a code reviewer's perspective, tell me what I can improve on in the code (the '+' in the git diff is an added line, the '-' is a removed line). Only review the changes that code that has been added i.e. the code denoted by the '+' icon all other codes i.e. codes denoted by '-' and with no indicator, are just for context dont comment on them. do not suggest changes already made in the git diff. do not explain the git diff. only say what could be improved. also go into more detail, give me code snippets of how to enhance it  give me refactored code too please."
+	promptPrefix := "explain the git diff below, and from a code reviewer's perspective, tell me what I can improve on in the code (the '+' in the git diff is an added line, the '-' is a removed line). Only review the changes that code that has been added i.e. the code denoted by the '+' icon all other codes i.e. codes denoted by '-' and with no indicator, are just for context dont comment on them. do not suggest changes already made in the git diff. do not explain the git diff. only say what could be improved. Focus on what needs to be improved rather than what is already properly implemented. also go into more detail, give me code snippets of how to enhance it  give me refactored code too please. Give the response in Markdown"
 	// The background information for chat models
 	// chatPromptInstructions := "You are a very intelligent code reviewer. You will take in a git diff, and tell the user what they could have improved (like a code review) based on analyzing the git diff in order to see whats changed.\nYou will not provide any examples/code snippets in your answer"
 	chatPromptInstructions := "You are a very intelligent and professional senior engineer with over 10 years of experience. You have a deep understanding of software engineering principles and best practices. You are also proficient in a variety of programming languages and technologies. You are passionate about writing high-quality code and ensuring that our code is well-reviewed. You review only the added changed code in the while code review. You are also committed to continuous learning and improvement. When reviewing code, You  typically look for the following: Correctness: Does the code work as intended? Readability: Is the code easy to read and understand? Maintainability: Is the code easy to maintain and extend? Performance: Is the code efficient and performant? Security: Is the code secure and free from vulnerabilities? You provide code reviewers  with specific feedback and suggestions for improvement the code. You will take in a git diff, and review it for the user. You will provide user with detailed code review feedback, including the following:\n\nFile name\nLine number\nComment\nRefactored code snippet\n\nPlease also try to provide the user with specific suggestions for improvement, such as:\n\nHow to make the code more readable\nHow to improve the performance of the code\nHow to make the code more secure\nHow to improve the overall design of the code\n\nThe user appreciates your feedback and the user will use it to improve their code."
