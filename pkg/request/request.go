@@ -8,6 +8,7 @@ import (
 	// for json
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	// for getting the api key
 	"github.com/vibovenkat123/review-gpt/pkg/globals"
@@ -17,6 +18,8 @@ import (
 	"errors"
 	// for the requests
 	"net/http"
+
+	"sync"
 
 	"github.com/charmbracelet/glamour"
 )
@@ -88,16 +91,59 @@ func LogVerbose(msg string) {
 // request the api
 func RequestApi(gitDiff string, model string, maxtokens int, temperature float64, top_p float64, frequence float64, presence float64, bestof int) {
 	LogVerbose("Requesting for improvements")
-	// get all the improvements
-	improvements, err := RequestImprovements(globals.OpenaiKey, gitDiff, model, maxtokens, temperature, top_p, frequence, presence, bestof)
-	LogVerbose("Got improvements")
-	if err != nil {
+
+	// Create channels for improvements and errors
+	improvementsChan := make(chan []string)
+	errChan := make(chan error)
+
+	chatPromptInstructions := "You are a very intelligent and professional senior engineer with over 10 years of experience. You have a deep understanding of software engineering principles and best practices. You are also proficient in a variety of programming languages and technologies. You are passionate about writing high-quality code and ensuring that our code is well-reviewed. You review only the added changed code in the while code review. You are also committed to continuous learning and improvement. When reviewing code, You  typically look for the following: Correctness: Does the code work as intended? Readability: Is the code easy to read and understand? Maintainability: Is the code easy to maintain and extend? Performance: Is the code efficient and performant? Security: Is the code secure and free from vulnerabilities? You provide code reviewers  with specific feedback and suggestions for improvement the code. You will take in a git diff, and review it for the user. You will provide user with detailed code review feedback, including the following:\n\nFile name\nLine number\nComment\nRefactored code snippet\n\nPlease also try to provide the user with specific suggestions for improvement, such as:\n\nHow to make the code more readable\nHow to improve the performance of the code\nHow to make the code more secure\nHow to improve the overall design of the code\n\nThe user appreciates your feedback and the user will use it to improve their code."
+
+	promptPrefix := "From a code reviewer's perspective, review the git diff below and tell me what I can improve on in the code (the '+' in the git diff is an added line, the '-' is a removed line). Only review the changes that code that has been added i.e. the code denoted by the '+' icon all other codes i.e. codes denoted by '-' and with no indicator, are just for context dont comment on them. do not suggest changes already made in the git diff. do not explain the git diff. only say what could be improved. Focus on what needs to be improved rather than what is already properly implemented. also go into more detail, give me code snippets of how to enhance it  give me refactored code too please. Give the response in Markdown"
+	adjustmentPromptPrefix := "Is there any more things to suggest based on the previous feedback provided?If yes, Summarize the both new and old response together, if not, Summarize the old response."
+
+	// Use a WaitGroup to wait for goroutines to finish
+	var wg sync.WaitGroup
+
+	// Start a goroutine to make the improvements API call
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		improvements, err := RequestImprovements(globals.OpenaiKey, gitDiff, model, maxtokens, temperature, top_p, frequence, presence, bestof, "IMPROVE", promptPrefix, chatPromptInstructions)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		improvementsChan <- improvements
+	}()
+
+	// Start another goroutine to handle the results
+	go func() {
+		// Wait for the improvements goroutine to finish
+		wg.Wait()
+		close(improvementsChan)
+		close(errChan)
+	}()
+
+	// Retrieve results from the channels
+	improvements, _ := <-improvementsChan
+	err, errOk := <-errChan
+	if errOk {
 		globals.Log.Error().
 			Err(err).
 			Msg("Error while getting improvements")
+		return
 	}
-	// print each improvement
-	for _, improvement := range improvements {
+
+	improvementSuggestionText := strings.Join(improvements, "/n")
+
+	adjustments, err := RequestImprovements(globals.OpenaiKey, improvementSuggestionText, model, maxtokens, temperature, top_p, frequence, presence, bestof, "ADJUST", adjustmentPromptPrefix, chatPromptInstructions)
+	if err != nil {
+		globals.Log.Error().
+			Err(err).
+			Msg("Error while getting adjustments")
+	}
+
+	for _, adjustment := range adjustments {
 		renderer, err := glamour.NewTermRenderer(
 			glamour.WithStyles(glamour.DraculaStyleConfig), // ASCIIStyle is one of many available styles
 		)
@@ -105,7 +151,7 @@ func RequestApi(gitDiff string, model string, maxtokens int, temperature float64
 			log.Fatal(err)
 		}
 
-		out, err := renderer.Render(improvement)
+		out, err := renderer.Render(adjustment)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -144,7 +190,7 @@ func CheckFormat(body Body, model bool) error {
 }
 
 // request the improvements
-func RequestImprovements(key string, gitDiff string, rawModel string, maxtokens int, temperature float64, top_p float64, frequence float64, presence float64, bestof int) ([]string, error) {
+func RequestImprovements(key string, gitDiff string, rawModel string, maxtokens int, temperature float64, top_p float64, frequence float64, presence float64, bestof int, operationMode string, promptPrefix string, chatPromptInstructions string) ([]string, error) {
 	answers := []string{}
 	model := globals.Models[rawModel]
 	_, hasModel := globals.Models[rawModel]
@@ -182,10 +228,6 @@ func RequestImprovements(key string, gitDiff string, rawModel string, maxtokens 
 	// request url
 	url := fmt.Sprintf("https://api.openai.com/v1/%v", endUrl)
 	// the instruction
-	promptPrefix := "from a code reviewer's perspective, Review the the git diff below and tell me what I can improve on in the code (the '+' in the git diff is an added line, the '-' is a removed line). Only review the changes that code that has been added i.e. the code denoted by the '+' icon all other codes i.e. codes denoted by '-' and with no indicator, are just for context dont comment on them. do not suggest changes already made in the git diff. do not explain the git diff. only say what could be improved. Focus on what needs to be improved rather than what is already properly implemented. also go into more detail, give me code snippets of how to enhance the code giving me refactored code too. Give the response in Markdown"
-	// The background information for chat models
-	chatPromptInstructions := "You are a very intelligent and professional senior engineer with over 10 years of experience. You have a deep understanding of software engineering principles and best practices. You are also proficient in a variety of programming languages and technologies. You are passionate about writing high-quality code and ensuring that our code is well-reviewed. You review only the added changed code in the while code review. You are also committed to continuous learning and improvement. When reviewing code, You  typically look for the following: Correctness: Does the code work as intended? Readability: Is the code easy to read and understand? Maintainability: Is the code easy to maintain and extend? Performance: Is the code efficient and performant? Security: Is the code secure and free from vulnerabilities? You provide code reviewers  with specific feedback and suggestions for improvement the code. You will take in a git diff, and review it for the user. You will provide user with detailed code review feedback, including the following:\n\nFile name\nLine number\nComment\nRefactored code snippet for code that needs refactoring\n\nPlease also try to provide the user with specific suggestions for improvement, such as:\n\nHow to make the code more readable\nHow to improve the performance of the code\nHow to make the code more secure\nHow to improve the overall design of the code\n\nThe user appreciates your feedback and the user will use it to improve their code."
-	// get the prompt using sprintf
 	prompt := fmt.Sprintf("%#v\n%#v\n", promptPrefix, gitDiff)
 	if model.Chat {
 		// The background message
@@ -202,6 +244,7 @@ func RequestImprovements(key string, gitDiff string, rawModel string, maxtokens 
 		chatParams.Messages = []Message{sysMessage, usrMessage}
 	} else {
 		// set the gpt3 prompt to the prompt defined before
+		fmt.Println(prompt)
 		params.Prompt = prompt
 	}
 	// marshal the params
