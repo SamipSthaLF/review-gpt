@@ -1,0 +1,3 @@
+#!/bin/sh
+source .env
+./bin/reviewgpt-$1-$2

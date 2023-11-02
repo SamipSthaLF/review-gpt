@@ -1,0 +1,2 @@
+#!/bin/sh
+go build -o bin/rgpt cmd/reviewgpt/reviewgpt.go
