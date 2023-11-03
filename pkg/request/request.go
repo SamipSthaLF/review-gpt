@@ -143,12 +143,19 @@ func CheckFormat(body Body, model bool) error {
 	return nil
 }
 
-// request the improvements
-func RequestImprovements(key string, gitDiff string, rawModel string, maxtokens int, temperature float64, top_p float64, frequence float64, presence float64, bestof int) ([]string, error) {
-	answers := []string{}
-	model := globals.Models[rawModel]
-	_, hasModel := globals.Models[rawModel]
-	// get the normal GPT3 body struct
+const (
+	API_BASE_URL = "https://api.openai.com/v1/"
+
+	PROMPT_PREFIX = `From a code reviewer's perspective, Review the the git diff below and tell me what I can improve on in the code (the '+' in the git diff is an added line, the '-' is a removed line). Only review the changes that code that has been added i.e. the code denoted by the '+' icon all other codes i.e. codes denoted by '-' and with no indicator, are just for context dont comment on them. Do not suggest changes already made in the git diff. Do not explain the git diff. Only say what could be improved. Focus on what needs to be improved rather than what is already properly implemented. Also go into more detail, give me code snippets of how to enhance the code giving me code suggestions too. Give the response in Markdown`
+
+	CHAT_PROMPT_INSTRUCTIONS = `You are a very intelligentX and professional senior engineer with over 10 years of experience. You have a deep understanding of software engineering principles and best practices. You are also proficient in a variety of programming languages and technologies. You are passionate about writing high-quality code and ensuring that our code is well-reviewed. You review only the added changed code in the while code review. You are also committed to continuous learning and improvement. When reviewing code, You  typically look for the following: Correctness: Does the code work as intended? Readability: Is the code easy to read and understand? Maintainability: Is the code easy to maintain and extend? Performance: Is the code efficient and performant? Security: Is the code secure and free from vulnerabilities? You provide code reviewers  with specific feedback and suggestions for improvement the cod You will take in a git diff, and review it for the user. You will provide user with detailed code review feedback, including the following: File name under 'File Name' section, Line number under 'Line Number' section, Comment under 'Comment' section, Sugegested Refactored code snippet for code that needs refactoring under 'Suggested Change' section. Please also try to provide the user with specific suggestions for improvement, such as: How to make the code more readable, How to improve the performance of the code, How to make the code more secure, How to improve the overall design of the code. The user appreciates your feedback and the user will use it to improve their code.`
+)
+
+// [Rest of your code as in the previous refactoring]
+
+// Helper function to configure parameters
+func configureParams(model globals.Model, maxtokens int, temperature, top_p, frequence, presence float64, bestof int) (Body, ChatBody) {
+	// Normal GPT3 body struct
 	params := Body{
 		Model:         model.Name,
 		Temperature:   temperature,
@@ -158,7 +165,8 @@ func RequestImprovements(key string, gitDiff string, rawModel string, maxtokens 
 		Presence_Pen:  presence,
 		Best_Of:       bestof,
 	}
-	// Get the struct for the chat models
+
+	// Chat models struct
 	chatParams := ChatBody{
 		Model:         model.Name,
 		Temperature:   temperature,
@@ -167,80 +175,88 @@ func RequestImprovements(key string, gitDiff string, rawModel string, maxtokens 
 		Frequence_Pen: frequence,
 		Presence_Pen:  presence,
 	}
-	// if the params are in the wrong format return an error
-	if err := CheckFormat(params, hasModel); err != nil {
-		return answers, err
-	}
-	// make model the actual model
-	params.Model = model.Name
-	chatParams.Model = model.Name
-	// the end of the url
-	endUrl := "completions"
+
+	return params, chatParams
+}
+
+// Helper function to create the request body
+func createRequestBody(model globals.Model, params Body, chatParams ChatBody, gitDiff string) (*bytes.Buffer, error) {
+	prompt := fmt.Sprintf("%s\n%s\n", PROMPT_PREFIX, gitDiff)
 	if model.Chat {
-		endUrl = "chat/completions"
-	}
-	// request url
-	url := fmt.Sprintf("https://api.openai.com/v1/%v", endUrl)
-	// the instruction
-	promptPrefix := "from a code reviewer's perspective, Review the the git diff below and tell me what I can improve on in the code (the '+' in the git diff is an added line, the '-' is a removed line). Only review the changes that code that has been added i.e. the code denoted by the '+' icon all other codes i.e. codes denoted by '-' and with no indicator, are just for context dont comment on them. do not suggest changes already made in the git diff. do not explain the git diff. only say what could be improved. Focus on what needs to be improved rather than what is already properly implemented. also go into more detail, give me code snippets of how to enhance the code giving me code suggestions too. Give the response in Markdown"
-	// The background information for chat models
-	chatPromptInstructions := "You are a very intelligent and professional senior engineer with over 10 years of experience. You have a deep understanding of software engineering principles and best practices. You are also proficient in a variety of programming languages and technologies. You are passionate about writing high-quality code and ensuring that our code is well-reviewed. You review only the added changed code in the while code review. You are also committed to continuous learning and improvement. When reviewing code, You  typically look for the following: Correctness: Does the code work as intended? Readability: Is the code easy to read and understand? Maintainability: Is the code easy to maintain and extend? Performance: Is the code efficient and performant? Security: Is the code secure and free from vulnerabilities? You provide code reviewers  with specific feedback and suggestions for improvement the code. You will take in a git diff, and review it for the user. You will provide user with detailed code review feedback, including the following:\n\nFile name under 'File Name' section\nLine number under 'Line Number' section\nComment under 'Comment' section\nSugegested Refactored code snippet for code that needs refactoring under 'Suggested Changes' section\n\nPlease also try to provide the user with specific suggestions for improvement, such as:\n\nHow to make the code more readable\nHow to improve the performance of the code\nHow to make the code more secure\nHow to improve the overall design of the code\n\nThe user appreciates your feedback and the user will use it to improve their code."
-	// get the prompt using sprintf
-	prompt := fmt.Sprintf("%#v\n%#v\n", promptPrefix, gitDiff)
-	if model.Chat {
-		// The background message
 		sysMessage := Message{
 			Role:    "system",
-			Content: chatPromptInstructions,
+			Content: CHAT_PROMPT_INSTRUCTIONS,
 		}
-		// The input (what they respond to)
 		usrMessage := Message{
 			Role:    "user",
 			Content: gitDiff,
 		}
-		// the message for turbo
 		chatParams.Messages = []Message{sysMessage, usrMessage}
 	} else {
-		// set the gpt3 prompt to the prompt defined before
 		params.Prompt = prompt
 	}
-	// marshal the params
+
 	var jsonParams []byte
 	var err error
-	// marshal the correct param struct
 	if model.Chat {
 		jsonParams, err = json.Marshal(chatParams)
 	} else {
 		jsonParams, err = json.Marshal(params)
 	}
 	if err != nil {
+		return nil, err
+	}
+
+	return bytes.NewBuffer(jsonParams), nil
+}
+
+// Main function with refactored content
+func RequestImprovements(key string, gitDiff string, rawModel string, maxtokens int, temperature float64, top_p float64, frequence float64, presence float64, bestof int) ([]string, error) {
+	answers := []string{}
+	model := globals.Models[rawModel]
+	_, hasModel := globals.Models[rawModel]
+
+	params, chatParams := configureParams(model, maxtokens, temperature, top_p, frequence, presence, bestof)
+
+	// Move this check before createRequestBody()
+	if err := CheckFormat(params, hasModel); err != nil {
 		return answers, err
 	}
-	// get the request body in bytes
-	reqBody := bytes.NewBuffer(jsonParams)
-	// form a new request
+
+	reqBody, err := createRequestBody(model, params, chatParams, gitDiff)
+	if err != nil {
+		globals.Log.Error().
+			Msg(fmt.Sprintf("Error creating request body: %s", err))
+		return answers, err
+	}
+
+	endUrl := "completions"
+	if model.Chat {
+		endUrl = "chat/completions"
+	}
+	url := fmt.Sprintf("%s%s", API_BASE_URL, endUrl)
+
 	LogVerbose("Creating new request")
 	req, err := http.NewRequest("POST", url, reqBody)
 	if err != nil {
 		globals.Log.Error().
 			Msg(fmt.Sprintf("Error sending request: %s", err))
+		return answers, err
 	}
-	// set the api key
+
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %v", key))
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{}
-	// execute the request
 	LogVerbose("Requesting GPT")
 	resp, err := client.Do(req)
 	if err != nil {
 		return answers, err
 	}
 	defer resp.Body.Close()
-	// get the body
+
 	LogVerbose("Got back the request information")
 	body, _ := io.ReadAll(resp.Body)
 	apiReq := APIResponse{}
-	// unmarshal (put the json in a struct) the body
 	err = json.Unmarshal([]byte(string(body)), &apiReq)
 	if err != nil {
 		globals.Log.Panic().
@@ -250,16 +266,13 @@ func RequestImprovements(key string, gitDiff string, rawModel string, maxtokens 
 		err := apiReq.Err
 		return answers, errors.New(err.Message)
 	}
-	// get all the choices
+
 	choices := apiReq.Choices
-	// append it to the answers array
 	for _, c := range choices {
-		// if its a chat model, its structured differently
 		if model.Chat {
 			answers = append(answers, c.Message.Content)
 			continue
 		}
-		// if its not empty
 		if len(c.Text) != 0 {
 			answers = append(answers, c.Text)
 		}
